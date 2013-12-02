@@ -44,6 +44,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,9 +60,11 @@ import org.kiji.schema.KijiRowData;
 import org.kiji.schema.KijiRowScanner;
 import org.kiji.schema.KijiTable;
 import org.kiji.schema.KijiTableReader;
+import org.kiji.schema.KijiTableReaderBuilder.OnDecoderCacheMiss;
 import org.kiji.schema.KijiTableReaderPool;
 import org.kiji.schema.KijiTableReaderPool.Builder.WhenExhaustedAction;
 import org.kiji.schema.RuntimeInterruptedException;
+import org.kiji.schema.layout.ColumnReaderSpec;
 import org.kiji.schema.util.JvmId;
 import org.kiji.schema.util.ReferenceCountable;
 import org.kiji.scoring.FreshKijiTableReader;
@@ -1543,7 +1546,10 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
       final List<KijiColumnName> columnsToFreshen,
       final StatisticGatheringMode statisticGatheringMode,
       final long statisticsLoggingInterval,
-      final ExecutorService executorService
+      final ExecutorService executorService,
+      final Map<KijiColumnName, ColumnReaderSpec> overrides,
+      final Multimap<KijiColumnName, ColumnReaderSpec> alternatives,
+      final OnDecoderCacheMiss onDecoderCacheMiss
   ) throws IOException {
     // CSON: ParameterNumberCheck
     // Initializing the reader state must be the first line of the constructor.
@@ -1557,6 +1563,9 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
         .withReaderFactory(mTable.getReaderFactory())
         .withExhaustedAction(WhenExhaustedAction.BLOCK)
         .withMaxActive(FreshenerThreadPool.DEFAULT_THREAD_POOL_SIZE)
+        .withColumnReaderSpecOverrides(overrides)
+        .withColumnReaderSpecAlternatives(alternatives)
+        .withOnDeocderCacheMissBehavior(onDecoderCacheMiss)
         .build();
     mBufferedWriter = new MultiBufferedWriter(mTable);
     mTimeout = timeout;

@@ -44,11 +44,13 @@ import org.kiji.schema.Kiji;
 import org.kiji.schema.KijiColumnName;
 import org.kiji.schema.KijiDataRequest;
 import org.kiji.schema.KijiDataRequestBuilder;
+import org.kiji.schema.KijiDataRequestBuilder.ColumnsDef;
 import org.kiji.schema.KijiMetaTable;
 import org.kiji.schema.KijiRowData;
 import org.kiji.schema.KijiTable;
 import org.kiji.schema.KijiTableReader;
 import org.kiji.schema.KijiTableWriter;
+import org.kiji.schema.layout.ColumnReaderSpec;
 import org.kiji.schema.layout.KijiTableLayout;
 import org.kiji.schema.layout.KijiTableLayouts;
 import org.kiji.schema.util.InstanceBuilder;
@@ -224,6 +226,27 @@ public class TestInternalFreshKijiTableReader {
         final KijiRowData dataToScore, final FreshenerContext context
     ) throws IOException {
       return TimestampedValue.create(context.getParameter(TEST_PARAMETER_KEY));
+    }
+  }
+
+  public static final class TestColumnReaderSpecOverrideScoreFunction
+      extends ScoreFunction<String> {
+
+    private static final KijiDataRequest REQUEST = KijiDataRequest.builder()
+        .addColumns(ColumnsDef.create().add(FAMILY_QUAL0, ColumnReaderSpec.bytes()))
+        .build();
+
+    public KijiDataRequest getDataRequest(
+        final FreshenerContext context
+    ) throws IOException {
+      return REQUEST;
+    }
+
+    public TimestampedValue<String> score(
+        final KijiRowData dataToScore, final FreshenerContext context
+    ) throws IOException {
+      final byte[] bytes = dataToScore.getMostRecentValue("family", "qual0");
+      return TimestampedValue.create(Bytes.toString(bytes));
     }
   }
 
@@ -1372,6 +1395,77 @@ public class TestInternalFreshKijiTableReader {
       // This should freshen just by leaving off the options.
       final KijiRowData freshData = freshReader.get(eid, request);
       assertEquals("new-val", freshData.getMostRecentValue("family", "qual0").toString());
+    } finally {
+      freshReader.close();
+    }
+  }
+
+  @Test
+  public void testColumnReaderSpecOverride() throws IOException {
+    final EntityId eid = mTable.getEntityId("foo");
+    final KijiDataRequest request = KijiDataRequest.create("family", "qual0");
+    final KijiFreshnessManager manager = KijiFreshnessManager.create(mKiji);
+    try {
+      manager.registerFreshener(
+          TABLE_NAME,
+          FAMILY_QUAL0,
+          ALWAYS,
+          new TestColumnReaderSpecOverrideScoreFunction(),
+          EMPTY_PARAMS,
+          false,
+          false);
+    } finally {
+      manager.close();
+    }
+
+    final FreshKijiTableReader freshReader = FreshKijiTableReader.Builder.create()
+        .withTable(mTable)
+        .withTimeout(500)
+        .build();
+    try {
+      final String freshened =
+          freshReader.get(eid, request).getMostRecentValue("family", "qual0").toString();
+      assertTrue(freshened.endsWith("foo-val"));
+    } finally {
+      freshReader.close();
+    }
+  }
+
+  @Test
+  public void testColumnReaderSpecOptions() throws IOException {
+    final EntityId eid = mTable.getEntityId("foo");
+    final KijiDataRequest simpleRequest = KijiDataRequest.create("family", "qual0");
+    final KijiDataRequest overrideRequest = KijiDataRequest.builder().addColumns(
+        ColumnsDef.create().add(new KijiColumnName("family", "qual0"), ColumnReaderSpec.bytes())
+    ).build();
+    final KijiFreshnessManager manager = KijiFreshnessManager.create(mKiji);
+    try {
+      manager.registerFreshener(
+          TABLE_NAME,
+          FAMILY_QUAL0,
+          ALWAYS,
+          TEST_SCORE_FN,
+          EMPTY_PARAMS,
+          false,
+          false);
+    } finally {
+      manager.close();
+    }
+
+    final FreshKijiTableReader freshReader = FreshKijiTableReader.Builder.create()
+        .withTable(mTable)
+        .withTimeout(500)
+        .build();
+    try {
+      final String simpleFreshened =
+          freshReader.get(eid, simpleRequest).getMostRecentValue("family", "qual0").toString();
+      assertEquals("new-val", simpleFreshened);
+      final byte[] overrideBytes =
+          freshReader.get(eid, overrideRequest).getMostRecentValue("family", "qual0");
+      final String overrideFreshened = Bytes.toString(overrideBytes);
+      // The overridden string should be longer than just "new-val" but should end with "new-val".
+      assertTrue(!"new-val".equals(overrideFreshened));
+      assertTrue(overrideFreshened.endsWith("new-val"));
     } finally {
       freshReader.close();
     }
