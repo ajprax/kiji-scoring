@@ -1613,4 +1613,53 @@ public class TestInternalFreshKijiTableReader {
       freshReader.close();
     }
   }
+
+  public static final class TestMapFamilyScoreFunction extends ScoreFunction<Integer> {
+    public KijiDataRequest getDataRequest(final FreshenerContext context) throws IOException {
+      return KijiDataRequest.empty();
+    }
+    public TimestampedValue<Integer> score(
+        final KijiRowData dataToScore, final FreshenerContext context
+    ) throws IOException {
+      return TimestampedValue.create(10);
+    }
+  }
+
+  @Test
+  public void testMapFamily() throws IOException {
+    final EntityId eid = mTable.getEntityId("foo");
+    final KijiDataRequest request = KijiDataRequest.builder().addColumns(
+        ColumnsDef.create().add("map", "qualifier").add("map", "qualifier1")
+    ).build();
+
+    final KijiFreshnessManager manager = KijiFreshnessManager.create(mKiji);
+    try {
+      manager.registerFreshener(
+          TABLE_NAME,
+          new KijiColumnName("map"),
+          ALWAYS,
+          new TestMapFamilyScoreFunction(),
+          EMPTY_PARAMS,
+          false,
+          false);
+    } finally {
+      manager.close();
+    }
+    final InternalFreshKijiTableReader freshReader =
+        (InternalFreshKijiTableReader) FreshKijiTableReader.Builder.create()
+            .withTable(mTable)
+            .withTimeout(500)
+            .withPartialFreshening(true)
+            .build();
+    try {
+      final Integer expected = 10;
+      final KijiRowData data = freshReader.get(eid, request);
+      final Integer actual = data.getMostRecentValue("map", "qualifier");
+      final Integer actual1 = data.getMostRecentValue("map", "qualifier1");
+      assertEquals(expected, actual);
+      assertEquals(expected, actual1);
+    } finally {
+      freshReader.close();
+    }
+  }
 }

@@ -75,7 +75,7 @@ public class TestMapFamilyFreshening extends KijiClientTest {
         final KijiRowData dataToScore,
         final FreshenerContext context
     ) throws IOException {
-      return TimestampedValue.create("new-val");
+      return TimestampedValue.create(NEW_VAL);
     }
   }
 
@@ -89,7 +89,7 @@ public class TestMapFamilyFreshening extends KijiClientTest {
         final KijiRowData dataToScore,
         final FreshenerContext context
     ) throws IOException {
-      return TimestampedValue.create("new-name");
+      return TimestampedValue.create(NEW_NAME);
     }
   }
 
