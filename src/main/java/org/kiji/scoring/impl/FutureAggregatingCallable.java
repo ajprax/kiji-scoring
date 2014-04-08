@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 
 import org.kiji.annotations.ApiAudience;
@@ -40,7 +39,7 @@ import org.kiji.annotations.ApiAudience;
 @ApiAudience.Private
 final class FutureAggregatingCallable<T> implements Callable<List<T>> {
 
-  private final ImmutableList<Future<T>> mFutures;
+  private final List<Future<T>> mFutures;
 
   /**
    * Initialize a new FutureAggregatingCallable.
@@ -48,7 +47,7 @@ final class FutureAggregatingCallable<T> implements Callable<List<T>> {
    * @param futures asynchronously calculated values to be collected.
    */
   public FutureAggregatingCallable(
-      final ImmutableList<Future<T>> futures
+      final List<Future<T>> futures
   ) {
     mFutures = futures;
   }
