@@ -39,6 +39,7 @@ import org.kiji.schema.KijiRowData;
 import org.kiji.scoring.FreshenerContext;
 import org.kiji.scoring.ScoreFunction;
 import org.kiji.scoring.impl.InternalFreshenerContext;
+import org.kiji.scoring.impl.NullCounterManager;
 
 /**
  * KijiProducer implementation which runs a ScoreFunction implementation by name.
@@ -127,6 +128,12 @@ public final class ScoreFunctionProducer extends KijiProducer {
     public KijiColumnName getAttachedColumn() {
       return mOtherDelegate.getAttachedColumn();
     }
+
+    /** {@inheritDoc} */
+    @Override
+    public void incrementCounter(final Enum<?> counter, final long value) {
+      mOtherDelegate.incrementCounter(counter, value);
+    }
   }
 
   private ScoreFunctionConf mScoreFunctionConf;
@@ -161,7 +168,9 @@ public final class ScoreFunctionProducer extends KijiProducer {
         getConf().get(SCORE_FUNCTION_PRODUCER_CONF_KEY), ScoreFunctionConf.class);
     mScoreFunction = scoreFunctionForName(mScoreFunctionConf.scoreFunctionClass);
     mInternalFreshenerContextDelegate = InternalFreshenerContext.create(
-        new KijiColumnName(mScoreFunctionConf.attachedColumn), mScoreFunctionConf.parameters);
+        new KijiColumnName(mScoreFunctionConf.attachedColumn),
+        mScoreFunctionConf.parameters,
+        NullCounterManager.get()); // TODO figure out how to get a real CounterManager here.
   }
 
   /** {@inheritDoc} */

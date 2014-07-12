@@ -50,6 +50,7 @@ import org.kiji.schema.EntityId;
 import org.kiji.schema.KijiColumnName;
 import org.kiji.schema.KijiDataRequest;
 import org.kiji.schema.KijiDataRequest.Column;
+import org.kiji.schema.KijiIOException;
 import org.kiji.schema.KijiRowData;
 import org.kiji.schema.KijiRowScanner;
 import org.kiji.schema.KijiTable;
@@ -60,6 +61,8 @@ import org.kiji.schema.KijiTableReaderPool.Builder.WhenExhaustedAction;
 import org.kiji.schema.layout.ColumnReaderSpec;
 import org.kiji.schema.util.JvmId;
 import org.kiji.schema.util.ReferenceCountable;
+import org.kiji.schema.util.ToJson;
+import org.kiji.scoring.CounterManager;
 import org.kiji.scoring.FreshKijiTableReader;
 import org.kiji.scoring.FreshKijiTableReader.Builder.StatisticGatheringMode;
 import org.kiji.scoring.KijiFreshnessManager;
@@ -313,6 +316,21 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
         case ALL: {
           for (FreshenerSingleRunStatistics stat : stats) {
             mAggregatedStatistics.addFreshenerRunStatistics(stat);
+            final String group;
+            try {
+              group = ToJson.toJsonString(stat.getFreshenerRecord());
+            } catch (IOException ioe) {
+              throw new KijiIOException(ioe);
+            }
+
+            mCounterManager.incrementCounter(group, "total_runs", 1);
+            mCounterManager.incrementCounter(group, "total_duration", stat.getDuration());
+            if (stat.producerRan()) {
+              mCounterManager.incrementCounter(group, "producer_ran_count", 1);
+            }
+            if (stat.timedOut()) {
+              mCounterManager.incrementCounter(group, "timed_out_count", 1);
+            }
           }
           return;
         }
@@ -429,15 +447,21 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
    * are proactively created.
    *
    * @param readerUID unique identifier for the reader which called this method. Used for logging.
+   * @param counterManager CounterManager with which FreshenerContexts can manage counters.
    * @param records the records from which to create Fresheners.
    * @return a mapping from KijiColumnNames to associated Fresheners.
    * @throws IOException in case of an error setting up a KijiFreshnessPolicy or ScoreFunction.
    */
   private static ImmutableMap<KijiColumnName, Freshener> createFresheners(
       final String readerUID,
+      final CounterManager counterManager,
       final ImmutableMap<KijiColumnName, KijiFreshenerRecord> records
   ) throws IOException {
-    return fillFresheners(readerUID, records, ImmutableMap.<KijiColumnName, Freshener>of());
+    return fillFresheners(
+        readerUID,
+        counterManager,
+        records,
+        ImmutableMap.<KijiColumnName, Freshener>of());
   }
 
   /**
@@ -445,6 +469,7 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
    * reflected by the fresheners map.
    *
    * @param readerUID unique identifier for the reader which called this method. Used for logging.
+   * @param counterManager CounterManager with which FreshenerContexts can manage counters.
    * @param records a map of records for which to create Fresheners.
    * @param oldFresheners a partially filled map of Fresheners to be completed with new Fresheners
    *    built from the records map.
@@ -453,6 +478,7 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
    */
   private static ImmutableMap<KijiColumnName, Freshener> fillFresheners(
       final String readerUID,
+      final CounterManager counterManager,
       final ImmutableMap<KijiColumnName, KijiFreshenerRecord> records,
       final ImmutableMap<KijiColumnName, Freshener> oldFresheners
   ) throws IOException {
@@ -465,7 +491,7 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
 
         // Create the FreshenerSetupContext
         final InternalFreshenerContext context =
-            InternalFreshenerContext.create(entry.getKey(), record.getParameters());
+            InternalFreshenerContext.create(entry.getKey(), record.getParameters(), counterManager);
 
         // Instantiate the policy and score function.
         final KijiFreshnessPolicy policy =
@@ -489,7 +515,8 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
             scoreFunction,
             factory,
             entry.getKey(),
-            entry.getValue().getParameters());
+            entry.getValue().getParameters(),
+            counterManager);
         LOG.debug("{} loading new Freshener: {}", readerUID, freshener);
         fresheners.put(entry.getKey(), freshener);
       } else {
@@ -697,6 +724,8 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
   private final UniqueIdGenerator mUniqueIdGenerator = new UniqueIdGenerator();
   /** ExecutorService from which to get Futures. */
   private final ExecutorService mExecutorService;
+  /** CounterManager with which FreshenerContexts can manage counters. */
+  private final CounterManager mCounterManager;
   /** All mutable state which may be modified by a called to {@link #rereadFreshenerRecords()}. */
   private volatile RereadableState mRereadableState;
 
@@ -713,6 +742,7 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
    * @param statisticsLoggingInterval time in milliseconds between automatic logging of statistics.
    *     0 indicates no automatic logging.
    * @param executorService ExecutorService to use for getting Futures.
+   * @param counterManager CounterManager with which FreshenerContexts can manage counters.
    * @param overrides ColumnReaderSpec overrides which will change the default behavior when reading
    *     the associated columns. These overrides will affect reads made to provide KijiRowData to
    *     Fresheners as well as reads made by the user.
@@ -735,6 +765,7 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
       final StatisticGatheringMode statisticGatheringMode,
       final long statisticsLoggingInterval,
       final ExecutorService executorService,
+      final CounterManager counterManager,
       final Map<KijiColumnName, ColumnReaderSpec> overrides,
       final Multimap<KijiColumnName, ColumnReaderSpec> alternatives,
       final OnDecoderCacheMiss onDecoderCacheMiss
@@ -760,10 +791,11 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
         ? columnsToFreshen : Lists.<KijiColumnName>newArrayList();
     final ImmutableMap<KijiColumnName, KijiFreshenerRecord> records = filterRecords(
         mFreshnessManager.retrieveFreshenerRecords(mTable.getName()), innerColumnsToFreshen);
+    mCounterManager = counterManager;
     mRereadableState = new RereadableState(
         innerColumnsToFreshen,
         records,
-        createFresheners(mReaderUID, records));
+        createFresheners(mReaderUID, mCounterManager, records));
     mStatisticGatheringMode = statisticGatheringMode;
 
     mStatisticsGathererThread = startStatisticsGatherer(statisticsLoggingInterval);
@@ -971,7 +1003,8 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
           mAllowPartial,
           mStatisticGatheringMode,
           mStatisticsQueue,
-          mExecutorService);
+          mExecutorService,
+          mCounterManager);
 
       final ImmutableList<Future<Boolean>> futures = requestContext.getFuturesForFresheners();
 
@@ -1060,6 +1093,7 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
           columnName,
           freshener.getParameters(),
           options.getParameters(),
+          mCounterManager,
           freshener.getKVStoreReaderFactory());
 
       final Future<KijiRowData> clientDataFuture = ScoringUtils.getFuture(
@@ -1195,14 +1229,30 @@ public final class InternalFreshKijiTableReader implements FreshKijiTableReader 
       }
     }
 
+    final Map<KijiColumnName, Freshener> newFresheners = fillFresheners(
+        mReaderUID,
+        mCounterManager,
+        newRecords,
+        ImmutableMap.copyOf(oldFresheners));
+
     // Swap the new RereadableState into place and release the old one. When the old one closes, it
     // will release all the Fresheners it held, which will close any that are no longer valid and
     // not in use.
     mRereadableState = new RereadableState(
         columnsToFreshen,
         newRecords,
-        fillFresheners(mReaderUID, newRecords, ImmutableMap.copyOf(oldFresheners)));
+        newFresheners);
     oldState.release();
+  }
+
+  // TODO figure out how we actually want to expose this.
+  /**
+   * Get the CounterManager used by this FreshKijiTableReader to track counter values.
+   *
+   * @return the CounterManager used by this FreshKijiTableReader to track counter values.
+   */
+  public CounterManager getCounterManager() {
+    return mCounterManager;
   }
 
   /** {@inheritDoc} */

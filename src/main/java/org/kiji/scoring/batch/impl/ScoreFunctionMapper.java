@@ -41,9 +41,11 @@ import org.kiji.mapreduce.kvstore.KeyValueStoreReaderFactory;
 import org.kiji.schema.KijiColumnName;
 import org.kiji.schema.KijiDataRequest;
 import org.kiji.schema.KijiRowData;
+import org.kiji.scoring.CounterManager;
 import org.kiji.scoring.ScoreFunction;
 import org.kiji.scoring.ScoreFunction.TimestampedValue;
 import org.kiji.scoring.batch.ScoreFunctionJobBuilder;
+import org.kiji.scoring.impl.HadoopContextCounterManager;
 import org.kiji.scoring.impl.InternalFreshenerContext;
 
 /** Hadoop mapper that runs a KijiScoring ScoreFunction. */
@@ -51,6 +53,12 @@ import org.kiji.scoring.impl.InternalFreshenerContext;
 public final class ScoreFunctionMapper extends KijiTableMapper<HFileKeyValue, NullWritable> {
 
   private static final Gson GSON = new Gson();
+
+  /** Counters exported by the ScoreFunctionMapper. */
+  public static enum Counters {
+    TOTAL_DURATION,
+    ROWS_PROCESSED
+  }
 
   private ScoreFunction<?> mScoreFunction = null;
   private KijiColumnName mAttachedColumn = null;
@@ -96,12 +104,14 @@ public final class ScoreFunctionMapper extends KijiTableMapper<HFileKeyValue, Nu
         conf.get(ScoreFunctionJobBuilder.SCORE_FUNCTION_PARAMETERS_CONF_KEY),
         Map.class);
     final KeyValueStoreReaderFactory factory = KeyValueStoreReaderFactory.create(conf);
+    final CounterManager counterManager = HadoopContextCounterManager.create(context);
     mClientDataRequest = getClientDataRequestFromConf(conf);
     mFreshenerContext = InternalFreshenerContext.create(
         mClientDataRequest,
         mAttachedColumn,
         mParameters,
         Maps.<String, String>newHashMap(),
+        counterManager,
         factory);
     mTableContext = KijiTableContextFactory.create(context);
     mScoreFunction.setup(mFreshenerContext);
@@ -113,7 +123,10 @@ public final class ScoreFunctionMapper extends KijiTableMapper<HFileKeyValue, Nu
       final KijiRowData input,
       final Context context
   ) throws IOException {
+    final long startTimeNanos = System.nanoTime();
     final TimestampedValue<?> score = mScoreFunction.score(input, mFreshenerContext);
+    mFreshenerContext.incrementCounter(Counters.TOTAL_DURATION, System.nanoTime() - startTimeNanos);
+    mFreshenerContext.incrementCounter(Counters.ROWS_PROCESSED, 1);
     mTableContext.put(
         input.getEntityId(),
         mAttachedColumn.getFamily(),

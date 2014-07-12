@@ -58,4 +58,13 @@ public interface FreshenerSetupContext extends FreshenerGetStoresContext {
    * @throws java.io.IOException if there is an error opening the underlying storage resource.
    */
   <K, V> KeyValueStoreReader<K, V> getStore(String storeName) throws IOException;
+
+  /**
+   * Increment the value of the named counter by the given value. Sets the counter's value instead
+   * of incrementing if the counter has not been set.
+   *
+   * @param counter Name of the counter to increment.
+   * @param value Value by which to increment the counter.
+   */
+  void incrementCounter(Enum<?> counter, long value);
 }

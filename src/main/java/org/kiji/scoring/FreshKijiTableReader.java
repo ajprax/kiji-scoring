@@ -50,6 +50,7 @@ import org.kiji.schema.KijiTableReaderBuilder.OnDecoderCacheMiss;
 import org.kiji.schema.layout.ColumnReaderSpec;
 import org.kiji.scoring.impl.FreshenerThreadPool;
 import org.kiji.scoring.impl.InternalFreshKijiTableReader;
+import org.kiji.scoring.impl.MapCounterManager;
 import org.kiji.scoring.statistics.FreshKijiTableReaderStatistics;
 
 /**
@@ -175,6 +176,14 @@ public interface FreshKijiTableReader extends KijiTableReader {
     /** By default, use the singleton executor service provided by FreshenerThreadPool. */
     private static final ExecutorService DEFAULT_EXECUTOR_SERVICE =
         FreshenerThreadPool.Singleton.GET.getExecutorService();
+    /**
+     * By default, use a new MapCounterManager.
+     *
+     * @return the default CounterManager.
+     */
+    private static CounterManager defaultCounterManager() {
+      return MapCounterManager.create();
+    }
     /** Delegate to the default ColumnReaderSpec overrides from {@link KijiTableReaderBuilder}. */
     private static final Map<KijiColumnName, ColumnReaderSpec> DEFAULT_READER_SPEC_OVERRIDES =
         KijiTableReaderBuilder.DEFAULT_READER_SPEC_OVERRIDES;
@@ -186,6 +195,7 @@ public interface FreshKijiTableReader extends KijiTableReader {
     /** Delegate to the default OnDecoderCacheMiss from {@link KijiTableReaderBuilder}. */
     private static final OnDecoderCacheMiss DEFAULT_CACHE_MISS =
         KijiTableReaderBuilder.DEFAULT_CACHE_MISS;
+
     /** Enumeration of possible modes of statistics gathering. */
     public static enum StatisticGatheringMode {
       NONE, ALL
@@ -225,6 +235,8 @@ public interface FreshKijiTableReader extends KijiTableReader {
     private Long mStatisticsLoggingInterval = null;
     /** ExecutorService to use for running threads internal to the fresh reader. */
     private ExecutorService mExecutorService = null;
+    /** counterManager with which to manage counters in the fresh reader. */
+    private CounterManager mCounterManager;
     /**
      * ColumnReaderSpec overrides which will be used to set default read behavior for reads
      * performed by this reader. These overrides will also affect reads performed internally by the
@@ -476,6 +488,32 @@ public interface FreshKijiTableReader extends KijiTableReader {
     }
 
     /**
+     * Configure the FreshKijiTableReader to use the given {@link CounterManager} to manage counters
+     * sent to {@link org.kiji.scoring.FreshenerSetupContext}s.
+     *
+     * @param counterManager CounterManager to use for managing counters in the fresh reader.
+     * @return this Builder configured to use the given CounterManager.
+     */
+    public Builder withCounterManager(
+        final CounterManager counterManager
+    ) {
+      Preconditions.checkState(null == mCounterManager,
+          "Counter manager is already set to: %s", mCounterManager);
+      Preconditions.checkNotNull(counterManager, "Counter manager may not be null.");
+      mCounterManager = counterManager;
+      return this;
+    }
+
+    /**
+     * Get the configured CounterManager from this Builder or null if none has been set.
+     *
+     * @return the configured CounterManager from this Builder or null if none has been set.
+     */
+    public CounterManager getCounterManager() {
+      return mCounterManager;
+    }
+
+    /**
      * Configure the reader to override the default read behavior of the given columns with the
      * behavior specified in the associated ColumnReaderSpecs. These overrides will change the
      * default read behavior for requests made to the reader itself and for requests made by
@@ -593,6 +631,9 @@ public interface FreshKijiTableReader extends KijiTableReader {
         mStatisticGatheringMode = DEFAULT_STATISTICS_MODE;
         mStatisticsLoggingInterval = DEFAULT_STATISTICS_LOGGING_INTERVAL;
       }
+      if (null == mCounterManager) {
+        mCounterManager = defaultCounterManager();
+      }
       if (null == mExecutorService) {
         mExecutorService = DEFAULT_EXECUTOR_SERVICE;
       }
@@ -615,6 +656,7 @@ public interface FreshKijiTableReader extends KijiTableReader {
           mStatisticGatheringMode,
           mStatisticsLoggingInterval,
           mExecutorService,
+          mCounterManager,
           mColumnReaderSpecOverrides,
           mColumnReaderSpecAlternatives,
           mOnDecoderCacheMiss);

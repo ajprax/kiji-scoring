@@ -60,10 +60,12 @@ import org.kiji.schema.layout.ColumnReaderSpec;
 import org.kiji.schema.layout.KijiTableLayout;
 import org.kiji.schema.layout.KijiTableLayouts;
 import org.kiji.schema.util.InstanceBuilder;
+import org.kiji.scoring.CounterManager;
 import org.kiji.scoring.FreshKijiTableReader;
 import org.kiji.scoring.FreshKijiTableReader.Builder.StatisticGatheringMode;
 import org.kiji.scoring.FreshKijiTableReader.FreshRequestOptions;
 import org.kiji.scoring.FreshenerContext;
+import org.kiji.scoring.FreshenerSetupContext;
 import org.kiji.scoring.KijiFreshnessManager;
 import org.kiji.scoring.KijiFreshnessPolicy;
 import org.kiji.scoring.ScoreFunction;
@@ -78,6 +80,14 @@ import org.kiji.scoring.statistics.FreshenerStatistics;
 /** Tests InternalFreshKijiTableReader. */
 public class TestInternalFreshKijiTableReader {
   private static final Logger LOG = LoggerFactory.getLogger(TestInternalFreshKijiTableReader.class);
+
+  public enum PolicyEnum {
+    SETUP, CLEANUP, SHOULD_USE_CLIENT_DATA_REQUEST, GET_DATA_REQUEST, IS_FRESH
+  }
+
+  public enum SFEnum {
+    SETUP, CLEANUP, GET_DATA_REQUEST, SCORE
+  }
 
   private static final String TABLE_NAME = "row_data_test_table";
   private static final KijiColumnName FAMILY_QUAL0 = new KijiColumnName("family", "qual0");
@@ -257,6 +267,51 @@ public class TestInternalFreshKijiTableReader {
       final byte[] bytes = dataToScore.getMostRecentValue("family", "qual0");
       return TimestampedValue.create(Bytes.toString(bytes));
     }
+  }
+
+  public static final class TestCounterFreshenessPolicy extends KijiFreshnessPolicy {
+
+
+    public void setup(FreshenerSetupContext context) {
+      context.incrementCounter(PolicyEnum.SETUP, 1);
+    }
+    public void cleanup(FreshenerSetupContext context) {
+      context.incrementCounter(PolicyEnum.CLEANUP, 1);
+    }
+    public boolean shouldUseClientDataRequest(FreshenerContext context) {
+      context.incrementCounter(PolicyEnum.SHOULD_USE_CLIENT_DATA_REQUEST, 1);
+      return false;
+    }
+    public KijiDataRequest getDataRequest(FreshenerContext context) {
+      context.incrementCounter(PolicyEnum.GET_DATA_REQUEST, 1);
+      return KijiDataRequest.empty();
+    }
+    public boolean isFresh(
+        final KijiRowData rowData, final FreshenerContext context
+    ) {
+      context.incrementCounter(PolicyEnum.IS_FRESH, 1);
+      return false;
+    }
+  }
+
+  public static final class TestCounterScoreFunction extends ScoreFunction<String> {
+    public void setup(FreshenerSetupContext context) {
+      context.incrementCounter(SFEnum.SETUP, 1);
+    }
+    public void cleanup(FreshenerSetupContext context) {
+      context.incrementCounter(SFEnum.CLEANUP, 1);
+    }
+    public KijiDataRequest getDataRequest(FreshenerContext context) {
+      context.incrementCounter(SFEnum.GET_DATA_REQUEST, 1);
+      return KijiDataRequest.create("family", "qual0");
+    }
+    public TimestampedValue<String> score(
+        final KijiRowData dataToScore, final FreshenerContext context
+    ) throws IOException {
+      context.incrementCounter(SFEnum.SCORE, 1);
+      return TimestampedValue.create("new-val");
+    }
+
   }
 
   private Kiji mKiji;
@@ -1646,6 +1701,48 @@ public class TestInternalFreshKijiTableReader {
       assertEquals(expected, actual);
     } finally {
       freshReader.close();
+    }
+  }
+
+  @Test
+  public void testCounters() throws IOException, InterruptedException {
+    final EntityId eid = mTable.getEntityId("foo");
+    final KijiDataRequest request = KijiDataRequest.create("family", "qual0");
+
+    final KijiFreshnessManager manager = KijiFreshnessManager.create(mKiji);
+    try {
+      manager.registerFreshener(
+          TABLE_NAME,
+          FAMILY_QUAL0,
+          new TestCounterFreshenessPolicy(),
+          new TestCounterScoreFunction(),
+          EMPTY_PARAMS,
+          false,
+          false);
+    } finally {
+      manager.close();
+    }
+    final InternalFreshKijiTableReader freshReader =
+        (InternalFreshKijiTableReader) FreshKijiTableReader.Builder.create()
+            .withTable(mTable)
+            .withTimeout(500)
+            .withStatisticsGathering(StatisticGatheringMode.ALL, 0)
+            .build();
+    try {
+      final String expected = "new-val";
+      final String actual = freshReader.get(eid, request)
+          .getMostRecentValue("family", "qual0").toString();
+      assertEquals(expected, actual);
+    } finally {
+      freshReader.close();
+    }
+
+    final CounterManager counterManager = freshReader.getCounterManager();
+    for (Enum<?> e : SFEnum.values()) {
+      assertEquals(1, counterManager.getCounterValue(e).longValue());
+    }
+    for (Enum<?> e : PolicyEnum.values()) {
+      assertEquals(1, counterManager.getCounterValue(e).longValue());
     }
   }
 }

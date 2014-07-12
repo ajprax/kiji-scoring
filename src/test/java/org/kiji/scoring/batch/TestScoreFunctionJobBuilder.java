@@ -24,9 +24,12 @@ import static org.junit.Assert.fail;
 
 import java.io.IOException;
 
+import org.apache.hadoop.mapreduce.Counters;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.kiji.mapreduce.JobConfigurationException;
 import org.kiji.mapreduce.KijiMapReduceJob;
@@ -44,6 +47,8 @@ import org.kiji.schema.util.InstanceBuilder;
 import org.kiji.scoring.impl.TestInternalFreshKijiTableReader;
 
 public class TestScoreFunctionJobBuilder extends KijiClientTest {
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestScoreFunctionJobBuilder.class);
 
   private Kiji mKiji;
   private KijiTable mTable;
@@ -112,5 +117,60 @@ public class TestScoreFunctionJobBuilder extends KijiClientTest {
       assertEquals(String.format("Output table must be the same as the input"
           + "table. Got input: %s output: %s", inURI, outURI), jce.getMessage());
     }
+  }
+
+  @Test
+  public void testCounters() throws IOException, InterruptedException, ClassNotFoundException {
+    final EntityId fooId = mTable.getEntityId("foo");
+    final EntityId barId = mTable.getEntityId("bar");
+    final KijiDataRequest request = KijiDataRequest.create("family", "qual0");
+
+    final KijiMapReduceJob sfJob = ScoreFunctionJobBuilder.create()
+        .withConf(getConf())
+        .withInputTable(mTable.getURI())
+        .withAttachedColumn(new KijiColumnName("family:qual0"))
+        .withScoreFunctionClass(TestInternalFreshKijiTableReader.TestCounterScoreFunction.class)
+        .withOutput(MapReduceJobOutputs.newDirectKijiTableMapReduceJobOutput(mTable.getURI()))
+        .build();
+
+    assertTrue(sfJob.run());
+
+    assertEquals("new-val",
+        mReader.get(fooId, request).getMostRecentValue("family", "qual0").toString());
+    assertEquals("new-val",
+        mReader.get(barId, request).getMostRecentValue("family", "qual0").toString());
+
+    final Counters counters = sfJob.getHadoopJob().getCounters();
+    // getDataRequest is only called during pre-cluster setup so it is not counted.
+    assertEquals(
+        "getDataRequest",
+        0,
+        counters.findCounter(
+            "org.kiji.scoring.impl.TestInternalFreshKijiTableReader$SFEnum",
+            "GET_DATA_REQUEST"
+        ).getValue());
+    // setup and cleanup are called once at the beginning and end of each mapper.
+    assertEquals(
+        "setup",
+        1,
+        counters.findCounter(
+            "org.kiji.scoring.impl.TestInternalFreshKijiTableReader$SFEnum",
+            "SETUP"
+        ).getValue());
+    assertEquals(
+        "cleanup",
+        1,
+        counters.findCounter(
+            "org.kiji.scoring.impl.TestInternalFreshKijiTableReader$SFEnum",
+            "CLEANUP"
+        ).getValue());
+    // score is called for every row.
+    assertEquals(
+        "score",
+        2,
+        counters.findCounter(
+            "org.kiji.scoring.impl.TestInternalFreshKijiTableReader$SFEnum",
+            "SCORE"
+        ).getValue());
   }
 }
